@@ -143,6 +143,14 @@ def test_unit_aliases_and_case():
     assert score.judge_answer("110020", "pounds", "110020", "lb", TOL) == score.CORRECT
     assert score.judge_answer("1.15E+06", "N-m2", "1.15E+06", "N·m²", TOL) == score.CORRECT
     assert score.judge_answer("337", "LB/IN", "337", "lb / in", TOL) == score.CORRECT
+    assert score.judge_answer("168", "knots", "168", "kt", TOL) == score.CORRECT
+    assert score.judge_answer("0.3", "n. mi.", "0.3", "nmi", TOL) == score.CORRECT
+    assert score.judge_answer("350", "lb/sq in", "350", "psi", TOL) == score.CORRECT
+    assert score.judge_answer("195", "fps", "195", "ft/sec", TOL) == score.CORRECT
+    assert score.judge_answer("790", "sq ft", "790", "ft²", TOL) == score.CORRECT
+    assert score.judge_answer("250", "°F", "250", "deg F", TOL) == score.CORRECT
+    assert score.judge_answer("15", "deg", "15", "°", TOL) == score.CORRECT
+    assert score.judge_answer("15", "deg", "15", "°F", TOL) == score.WRONG_UNITS
 
 
 def test_blank_expected_units_are_not_checked():

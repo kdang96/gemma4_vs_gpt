@@ -2,10 +2,12 @@
 
 from pathlib import Path
 
+from costs import ModelPrice
+
 ROOT = Path(__file__).parent
-PAGES_DIR = ROOT / "selected_pages"
+PAGES_DIR = ROOT / "selected_pages" / "nasa_qa_all_100_pages"
 RENDER_DIR = ROOT / "renders"
-QA_CSV = ROOT / "eval" / "sources.csv"
+QA_FILE = ROOT / "eval" / "nasa_qa_all_100.xlsx"
 RESULTS_DIR = ROOT / "results"
 SCORES_DIR = ROOT / "scores"
 
@@ -14,20 +16,20 @@ DEFAULT_TOLERANCE = 0.0  # 0 = numeric answers must be exact (26.4 and 26.40 are
 DEFAULT_CONCURRENCY = 4
 MAX_ATTEMPTS = 6  # attempts per call when the API gives a rate limit or server error
 
-# USD per 1 million tokens: (input, output).
+# USD per 1 million tokens: input, output and cached input.
 # Prices are from third-party summaries, not from OpenAI. Make sure that they
 # agree with https://openai.com/api/pricing before you report a cost.
 # A model that is not in this table gets cost "n/a".
 # The local vLLM backend always costs 0 USD (hardware cost is not included).
-PRICES_PER_1M_TOKENS = {
-    "gpt-5.5": (5.00, 30.00),
-    "gpt-5.4": (2.50, 15.00),
-    "gpt-5.4-mini": (0.75, 4.50),
-    "gpt-5": (1.25, 10.00),
-    "gpt-5-mini": (0.25, 2.00),
-    "gpt-5-nano": (0.05, 0.40),
-    "gpt-4.1": (2.00, 8.00),
-    "gpt-4.1-mini": (0.40, 1.60),
+PRICES = {
+    "gpt-5.5": ModelPrice(input_per_million=5.00, output_per_million=30.00, cached_input_per_million=0.50),
+    "gpt-5.4": ModelPrice(input_per_million=2.50, output_per_million=15.00, cached_input_per_million=0.25),
+    "gpt-5.4-mini": ModelPrice(input_per_million=0.75, output_per_million=4.50, cached_input_per_million=0.075),
+    "gpt-5": ModelPrice(input_per_million=1.25, output_per_million=10.00, cached_input_per_million=0.125),
+    "gpt-5-mini": ModelPrice(input_per_million=0.25, output_per_million=2.00, cached_input_per_million=0.025),
+    "gpt-5-nano": ModelPrice(input_per_million=0.05, output_per_million=0.40, cached_input_per_million=0.005),
+    "gpt-4.1": ModelPrice(input_per_million=2.00, output_per_million=8.00, cached_input_per_million=0.50),
+    "gpt-4.1-mini": ModelPrice(input_per_million=0.40, output_per_million=1.60, cached_input_per_million=0.10),
 }
 
 # Unit spellings that mean the same unit. Keys and values are lowercase with no
@@ -60,4 +62,83 @@ UNIT_ALIASES = {
     "n·m2": "n*m^2",
     "n·m²": "n*m^2",
     "n-m²": "n*m^2",
+    "newton": "n",
+    "newtons": "n",
+    "lbf": "lb",
+    "meter": "m",
+    "meters": "m",
+    "metre": "m",
+    "metres": "m",
+    "centimeter": "cm",
+    "centimeters": "cm",
+    "centimetre": "cm",
+    "centimetres": "cm",
+    "n.mi.": "nmi",
+    "n.mi": "nmi",
+    "nmi.": "nmi",
+    "nauticalmile": "nmi",
+    "nauticalmiles": "nmi",
+    "m2": "m^2",
+    "m²": "m^2",
+    "sqm": "m^2",
+    "sqft": "ft^2",
+    "sq.ft.": "ft^2",
+    "sq.ft": "ft^2",
+    "ft2": "ft^2",
+    "ft²": "ft^2",
+    "squarefeet": "ft^2",
+    "sec": "s",
+    "sec.": "s",
+    "second": "s",
+    "seconds": "s",
+    "minute": "min",
+    "minutes": "min",
+    "mins": "min",
+    "gigahertz": "ghz",
+    "°": "deg",
+    "degree": "deg",
+    "degrees": "deg",
+    "°f": "degf",
+    "degreesf": "degf",
+    "degreesfahrenheit": "degf",
+    "knots": "kt",
+    "knot": "kt",
+    "kts": "kt",
+    "kn": "kt",
+    "mi/h": "mph",
+    "mi/hr": "mph",
+    "milesperhour": "mph",
+    "ft/sec": "ft/s",
+    "fps": "ft/s",
+    "feetpersecond": "ft/s",
+    "m/sec": "m/s",
+    "meterspersecond": "m/s",
+    "fpm": "ft/min",
+    "feetperminute": "ft/min",
+    "rad/sec2": "rad/s^2",
+    "rad/sec^2": "rad/s^2",
+    "rad/sec²": "rad/s^2",
+    "rad/s2": "rad/s^2",
+    "rad/s²": "rad/s^2",
+    "g2": "g^2",
+    "g²": "g^2",
+    "n/m2": "n/m^2",
+    "n/m²": "n/m^2",
+    "pa": "n/m^2",
+    "lb/sqin": "psi",
+    "lb/sq.in.": "psi",
+    "lb/in2": "psi",
+    "lb/in^2": "psi",
+    "lb/in²": "psi",
+    "lbf/in2": "psi",
+    "lbf/in^2": "psi",
+    "lbf/in²": "psi",
+    "billion$": "$billion",
+    "billiondollars": "$billion",
+    "billionusd": "$billion",
+    "usdbillion": "$billion",
+    "million$": "$million",
+    "milliondollars": "$million",
+    "millionusd": "$million",
+    "usdmillion": "$million",
 }

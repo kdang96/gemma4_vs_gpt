@@ -27,15 +27,19 @@ skills (the `Category` column in the QA file):
 
 ## Data
 
-- `selected_pages/`: 20 single-page PDFs. The file name is the page ID:
-  `ntrs<NTRS citation number>_p<page number>.pdf`.
-- `eval/sources.csv`: one row per question. Columns: `Title`, `Pages`, `Link`
-  (NTRS citation), `Category`, `User query`, `Expected Answer`, `Units`, `page_id`.
+- `selected_pages/nasa_qa_all_100_pages/`: 80 single-page PDFs. The file name is the page ID:
+  `<NTRS citation number>_p<page number, 3 digits>.pdf`, for example `19750006673_p010.pdf`.
+- `eval/nasa_qa_all_100.xlsx`: the answer key, one row per question (100 rows).
+  Columns: `Title`, `Pages`, `Link` (NTRS citation), `Category`, `User query`,
+  `Expected Answer`, `Units`, `Page file`, `Source evidence (review only)`, `Batch`.
+  The benchmark does not send `Source evidence` to a model.
+
+The paths are `QA_FILE` and `PAGES_DIR` in `config.py`.
 
 ### How the data was chosen
 
 The pages come from public reports on the NASA Technical Reports Server (NTRS).
-We chose each page because it has complex numeric content. There is one question per page.
+We chose each page because it has complex numeric content. A page can have more than one question.
 
 <!-- TODO: say who wrote the questions and how the expected answers were checked. -->
 
@@ -45,7 +49,7 @@ Use the name that your vLLM server reports at `/v1/models`.
 ## Scoring rules
 
 Each question gets one outcome. Only `correct` counts as correct.
-The accuracy denominator is all questions in the QA file. Schema failures,
+The accuracy denominator is all questions in the QA file (100). Schema failures,
 "not found" answers, API errors and missing records count as incorrect.
 
 | Outcome | Meaning |
@@ -96,14 +100,15 @@ without new model calls.
 **Latency** is the wall time of one successful API call, without retry waits.
 The p95 latency uses the nearest-rank method.
 
-**Cost** = input tokens × input price + output tokens × output price, with the
-prices in `PRICES_PER_1M_TOKENS` in `config.py`. Make sure that these prices are current
+**Cost** = uncached input tokens × input price + cached input tokens × cached input
+price + output tokens × output price. The token counts come from the API response of
+each call. The prices are in `PRICES` in `config.py`. Make sure that these prices are current
 before you report a cost. The local vLLM model costs 0 USD. This does not include the cost
 of the hardware.
 
 ### Known limits
 
-- The data set is small (20 questions). One question is 5 % of the accuracy.
+- The data set is small (100 questions). One question is 1 % of the accuracy.
 - Each question is asked one time. The benchmark does not measure run-to-run variation.
 
 ## How to run

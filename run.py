@@ -27,6 +27,7 @@ import config
 import prompts
 import render
 from common import ModelAnswer, load_questions, parse_answer
+from costs import TokenUsage, calculate_cost
 
 # Errors that can go away if we wait and try again.
 RETRY_ERRORS = (openai.RateLimitError, openai.APIConnectionError, openai.InternalServerError)
@@ -51,13 +52,12 @@ def image_data_url(png: Path) -> str:
     return "data:image/png;base64," + base64.b64encode(png.read_bytes()).decode("ascii")
 
 
-def estimate_cost(backend: str, model: str, input_tokens: int, output_tokens: int) -> float | None:
+def estimate_cost(backend: str, model: str, usage: TokenUsage) -> float | None:
     if backend == "vllm":
         return 0.0
-    if model not in config.PRICES_PER_1M_TOKENS:
+    if model not in config.PRICES:
         return None
-    input_price, output_price = config.PRICES_PER_1M_TOKENS[model]
-    return (input_tokens * input_price + output_tokens * output_price) / 1_000_000
+    return calculate_cost(usage, config.PRICES[model])
 
 
 def call_model(client: OpenAI, args, question: dict) -> dict:
@@ -92,6 +92,7 @@ def call_model(client: OpenAI, args, question: dict) -> dict:
         "latency_s": None,
         "input_tokens": None,
         "output_tokens": None,
+        "cached_input_tokens": None,
         "cost_usd": None,
     }
 
@@ -119,9 +120,18 @@ def call_model(client: OpenAI, args, question: dict) -> dict:
     record["raw_response"] = choice.message.content
     record["finish_reason"] = choice.finish_reason
     if response.usage is not None:
-        record["input_tokens"] = response.usage.prompt_tokens
-        record["output_tokens"] = response.usage.completion_tokens
-        record["cost_usd"] = estimate_cost(args.backend, args.model, record["input_tokens"], record["output_tokens"])
+        # The output tokens include the reasoning tokens. OpenAI bills them as output.
+        # vLLM can send no prompt_tokens_details.
+        details = response.usage.prompt_tokens_details
+        usage = TokenUsage(
+            input_tokens=response.usage.prompt_tokens,
+            output_tokens=response.usage.completion_tokens,
+            cached_input_tokens=(details.cached_tokens or 0) if details else 0,
+        )
+        record["input_tokens"] = usage.input_tokens
+        record["output_tokens"] = usage.output_tokens
+        record["cached_input_tokens"] = usage.cached_input_tokens
+        record["cost_usd"] = estimate_cost(args.backend, args.model, usage)
 
     answer, error = parse_answer(choice.message.content)
     if answer is None:
