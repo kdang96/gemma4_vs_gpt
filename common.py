@@ -26,6 +26,8 @@ def load_questions(qa_path: Path = config.QA_FILE) -> list[dict]:
     The page_id is the "Page file" name without ".pdf" (for example "19750006673_p010").
     Each question gets a "qid". The qid is the page_id plus a counter, so a page
     can have more than one question (for example "19750006673_p010#1").
+    "Accept min" and "Accept max" are optional. They give the accepted range for a chart reading.
+    "Alt answer" and "Alt units" are optional. They give the same value in other units, as the page prints it.
     The "Source evidence (review only)" column is for people. We do not send it to a model.
     """
     workbook = openpyxl.load_workbook(qa_path, read_only=True, data_only=True)
@@ -48,6 +50,10 @@ def load_questions(qa_path: Path = config.QA_FILE) -> list[dict]:
                     "question": row["User query"],
                     "expected_value": row["Expected Answer"],
                     "units": row["Units"],
+                    "accept_min": row.get("Accept min", ""),
+                    "accept_max": row.get("Accept max", ""),
+                    "alt_value": row.get("Alt answer", ""),
+                    "alt_units": row.get("Alt units", ""),
                 }
             )
     finally:

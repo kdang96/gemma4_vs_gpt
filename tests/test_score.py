@@ -6,7 +6,15 @@ import pytest
 import score
 
 
-def make_question(expected_value, units="", category="table_multi_condition"):
+def make_question(
+    expected_value,
+    units="",
+    category="table_multi_condition",
+    accept_min="",
+    accept_max="",
+    alt_value="",
+    alt_units="",
+):
     return {
         "qid": "page#1",
         "page_id": "page",
@@ -14,6 +22,10 @@ def make_question(expected_value, units="", category="table_multi_condition"):
         "question": "What is it?",
         "expected_value": expected_value,
         "units": units,
+        "accept_min": accept_min,
+        "accept_max": accept_max,
+        "alt_value": alt_value,
+        "alt_units": alt_units,
     }
 
 
@@ -44,6 +56,9 @@ def answer_json(value, units=None, found=True, confidence="high"):
         ("+13", Decimal("13")),
         (" 26.40 ", Decimal("26.40")),
         ("1.15E+06", Decimal("1150000")),
+        (".028", Decimal("0.028")),
+        ("five", Decimal("5")),
+        ("Five", Decimal("5")),
     ],
 )
 def test_parse_number_accepts_plain_numbers(text, expected):
@@ -83,6 +98,70 @@ def test_expected_zero_needs_exact_zero():
 
 def test_numeric_expected_with_text_answer_is_wrong():
     assert score.judge_answer("87", "IN", "87 in", "IN") == score.WRONG_VALUE
+    assert score.judge_answer("18", "s", "12 to 18", "s") == score.WRONG_VALUE
+
+
+def test_number_word_matches_digits():
+    assert score.judge_answer("5", "", "five", None) == score.CORRECT
+    assert score.judge_answer("5", "", "four", None) == score.WRONG_VALUE
+
+
+# --- accepted range (chart readings) ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "predicted, is_match",
+    [
+        ("195", True),  # the edges count as a match
+        ("200", True),
+        ("205", True),
+        ("194.9", False),
+        ("205.1", False),
+    ],
+)
+def test_accepted_range(predicted, is_match):
+    outcome = score.judge_answer("202", "", predicted, None, "195", "205")
+    assert (outcome == score.CORRECT) == is_match
+
+
+def test_accepted_range_still_checks_units():
+    assert score.judge_answer("90", "knots", "90", "kt", "85", "95") == score.CORRECT
+    assert score.judge_answer("90", "knots", "90", "mph", "85", "95") == score.WRONG_UNITS
+
+
+def test_no_range_means_exact():
+    assert score.judge_answer("202", "", "200", None) == score.WRONG_VALUE
+
+
+# --- money and scale words --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value, units, outcome",
+    [
+        ("7.9 million", "dollars", score.CORRECT),
+        ("7.9", "$ million", score.CORRECT),
+        ("7.9", "million USD", score.CORRECT),
+        ("$7.9 million", None, score.CORRECT),
+        ("7900000", "$", score.CORRECT),
+        ("7.9 million", None, score.WRONG_UNITS),  # no currency
+        ("7.9", "million", score.WRONG_UNITS),  # no currency
+        ("7.9", "$", score.WRONG_VALUE),  # the "million" is missing
+        ("7.9 billion", "$", score.WRONG_VALUE),
+    ],
+)
+def test_money_amounts(value, units, outcome):
+    assert score.judge_answer("7900000", "USD", value, units) == outcome
+
+
+# --- plus-minus -------------------------------------------------------------
+
+
+def test_plus_minus_must_agree():
+    assert score.judge_answer("±2.0", "g", "±2", "g") == score.CORRECT
+    assert score.judge_answer("±2.0", "g", "+/-2.0", "g") == score.CORRECT
+    assert score.judge_answer("±2.0", "g", "2.0", "g") == score.WRONG_VALUE
+    assert score.judge_answer("2.0", "g", "±2.0", "g") == score.WRONG_VALUE
 
 
 # --- units ------------------------------------------------------------------
@@ -109,6 +188,9 @@ def test_unit_aliases_and_case():
     assert score.judge_answer("250", "°F", "250", "deg F") == score.CORRECT
     assert score.judge_answer("15", "deg", "15", "°") == score.CORRECT
     assert score.judge_answer("15", "deg", "15", "°F") == score.WRONG_UNITS
+    assert score.judge_answer("25.2", "in", "25.2", '"') == score.CORRECT
+    assert score.judge_answer("350", "lb/sq in", "350", "lb/sq in.") == score.CORRECT
+    assert score.judge_answer("12", "s", "12", "sec.") == score.CORRECT
 
 
 def test_blank_expected_units_are_not_checked():
@@ -122,10 +204,27 @@ def test_wrong_value_has_priority_over_wrong_units():
 # --- text answers -----------------------------------------------------------
 
 
-def test_text_normalised_exact_match():
+def test_text_answer_must_contain_all_expected_words():
     assert score.judge_answer("Hysol 5189/3538", "", "hysol 5189 / 3538.", None) == score.CORRECT
-    assert score.judge_answer("1925Z-0014Z/15", "", "1925Z–0014Z/15", None) == score.CORRECT  # en dash
+    assert score.judge_answer("Hysol 5189/3538", "", "Hysol 5189/3538 adhesive", None) == score.CORRECT
     assert score.judge_answer("Hysol 5189/3538", "", "Hysol 5189", None) == score.WRONG_VALUE
+    assert score.judge_answer("1925Z-0014Z/15", "", "1925Z–0014Z/15", None) == score.CORRECT  # en dash
+    assert score.judge_answer("1925Z-0014Z/15", "", "0259z-0014z/15", None) == score.WRONG_VALUE
+
+
+def test_text_words_use_unit_aliases_and_symbols():
+    grooves = "3/8 in x 3/8 in on 2 in centers"
+    assert score.judge_answer(grooves, "", "3/8 x 3/8 on 2 inches centers", None) == score.CORRECT
+    assert score.judge_answer(grooves, "", '3/8" x 3/8" on 2" centers', None) == score.CORRECT
+    assert score.judge_answer(grooves, "", "3/8 x 3/8", None) == score.WRONG_VALUE
+    equation = "VP = 10.35 sqrt(p)"
+    assert score.judge_answer(equation, "", "v_P = 10.35 sqrt(p)", None) == score.CORRECT
+    assert score.judge_answer(equation, "", "V_P = 10.35√P", None) == score.CORRECT
+    assert score.judge_answer(equation, "", "VP = 9 sqrt(p)", None) == score.WRONG_VALUE
+
+
+def test_text_answer_units_are_checked():
+    assert score.judge_answer("VP = 10.35 sqrt(p)", "mph", "VP = 10.35 sqrt(p)", None) == score.WRONG_UNITS
 
 
 # --- whole records ----------------------------------------------------------
@@ -160,6 +259,48 @@ def test_valid_response_is_scored():
 def test_not_found():
     row = score.score_item(make_question("3"), make_record(answer_json(None, found=False, confidence="low")))
     assert row["outcome"] == score.NOT_FOUND
+
+
+@pytest.mark.parametrize(
+    "value, units, outcome",
+    [
+        ("30.6", "m", score.CORRECT),
+        ("100.3", "ft", score.CORRECT),  # the alternative answer
+        ("100.3", "feet", score.CORRECT),
+        ("30.6", "m (100.3 ft)", score.CORRECT),  # the restatement in brackets is ignored
+        ("30.6 (100.3 ft)", "m", score.CORRECT),
+        ("100.3", "m", score.WRONG_UNITS),  # the value of the alternative with the wrong units
+        ("30.6", "ft", score.WRONG_UNITS),
+        ("31", "m", score.WRONG_VALUE),
+    ],
+)
+def test_alternative_answer_in_other_units(value, units, outcome):
+    question = make_question("30.6", "m", alt_value="100.3", alt_units="ft")
+    assert score.score_item(question, make_record(answer_json(value, units)))["outcome"] == outcome
+
+
+def test_restatement_needs_a_number_in_brackets():
+    assert score.units_key("m (100.3 ft)") == "m"
+    assert score.units_key("lb/(in)") == "lb/(in)"
+    assert score.judge_answer("4.4", "lbf/ft2", "4.4", "psf") == score.CORRECT
+
+
+def test_record_for_a_changed_question_is_missing():
+    record = make_record(answer_json("3"))
+    record["question"] = "An older question?"
+    row = score.score_item(make_question("3"), record)
+    assert row["outcome"] == score.MISSING
+    assert row["detail"] != ""
+    record["question"] = "What is it?"
+    assert score.score_item(make_question("3"), record)["outcome"] == score.CORRECT
+
+
+def test_items_csv_opens_in_excel_with_special_characters(tmp_path):
+    path = tmp_path / "items.csv"
+    score.write_items_csv(path, [{"question": "What was the 3σ error at 15°?"}])
+    raw = path.read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf")  # byte-order mark
+    assert "3σ error at 15°" in raw.decode("utf-8-sig")
 
 
 def test_api_error_and_missing_record():

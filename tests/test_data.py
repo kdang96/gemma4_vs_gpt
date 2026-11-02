@@ -1,5 +1,7 @@
 """Checks that the QA file and the page folder agree. These tests do not call a model."""
 
+from decimal import Decimal
+
 import config
 from common import load_questions
 
@@ -27,3 +29,20 @@ def test_numbers_from_excel_cells_are_plain_text():
     assert by_qid["19750006673_p010#1"]["expected_value"] == "0.5"
     assert by_qid["19630002367_p013#2"]["expected_value"] == "8.3"
     assert by_qid["19750002863_p011#1"]["expected_value"] == "1148000"
+
+
+def test_accepted_ranges_are_complete_and_contain_the_expected_value():
+    for q in load_questions():
+        if not (q["accept_min"] or q["accept_max"]):
+            continue
+        assert q["accept_min"] and q["accept_max"], q["qid"]
+        assert Decimal(q["accept_min"]) <= Decimal(q["expected_value"]) <= Decimal(q["accept_max"]), q["qid"]
+
+
+def test_alternative_answers_are_complete_numbers():
+    for q in load_questions():
+        if not (q["alt_value"] or q["alt_units"]):
+            continue
+        assert q["alt_value"] and q["alt_units"], q["qid"]
+        assert Decimal(q["alt_value"]) > 0, q["qid"]
+        assert q["units"] != "", q["qid"]  # an alternative in other units needs the main units

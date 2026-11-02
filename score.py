@@ -12,7 +12,7 @@ import argparse
 import csv
 import json
 import math
-import unicodedata
+import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -36,15 +36,40 @@ OUTCOMES = [CORRECT, WRONG_VALUE, WRONG_UNITS, NOT_FOUND, SCHEMA_FAILURE, API_ER
 # ---------------------------------------------------------------------------
 
 
+# Words that multiply a number, in the value ("7.9 million") or in the units ("$ billion").
+SCALE_WORDS = {
+    "thousand": Decimal(10**3),
+    "million": Decimal(10**6),
+    "billion": Decimal(10**9),
+    "trillion": Decimal(10**12),
+}
+
+# Words after a number that mean US dollars ("560 billion dollars").
+CURRENCY_WORDS = {"$", "us$", "usd", "dollar", "dollars"}
+
+# A model can write a small whole number as a word, for example "five" when the page says "five".
+NUMBER_WORDS = {
+    word: Decimal(n)
+    for n, word in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+        "sixteen seventeen eighteen nineteen twenty".split()
+    )
+}
+
+PLUS_MINUS_SIGNS = ("±", "+/-", "+-")
+
+
 def parse_number(text: str | None) -> Decimal | None:
     """Return text as a Decimal, or None if text is not a plain number.
 
-    Accepts "39477", "39,477", "+13", "26.40" and "1.15E+06".
+    Accepts "39477", "39,477", "+13", "26.40", ".028", "1.15E+06" and number words from "zero" to "twenty".
     Rejects "87 in", "about 3", "NaN" and "Infinity".
     """
     if text is None:
         return None
     cleaned = text.strip().replace(",", "")  # remove thousands separators
+    if cleaned.lower() in NUMBER_WORDS:
+        return NUMBER_WORDS[cleaned.lower()]
     try:
         number = Decimal(cleaned)
     except InvalidOperation:
@@ -54,58 +79,128 @@ def parse_number(text: str | None) -> Decimal | None:
     return number
 
 
-def normalise_text(text: str | None) -> str:
-    """Lowercase the text and remove all whitespace and punctuation.
+def split_plus_minus(text: str | None) -> tuple[bool, str]:
+    """Remove a leading plus-minus sign. Return (True if there was one, the remaining text)."""
+    stripped = (text or "").strip()
+    for sign in PLUS_MINUS_SIGNS:
+        if stripped.startswith(sign):
+            return True, stripped[len(sign) :].strip()
+    return False, stripped
 
-    Example: "Hysol 5189 / 3538." becomes "hysol51893538".
-    Punctuation is every character in a Unicode "P" category (for example . , / - ( ) and the en dash).
+
+def strip_restatement(text: str) -> str:
+    """Remove a part in brackets at the end that contains a number, for example the "(100.3 ft)" in "m (100.3 ft)".
+
+    Pages often give a value in two units, for example "30.6 m (100.3 ft)". A model can copy the
+    second value into "units" or "value". We ignore that part and do not check it.
     """
-    if text is None:
+    return re.sub(r"\s+\([^()]*\d[^()]*\)$", "", text.strip())
+
+
+def units_key(units: str | None) -> str:
+    """Lowercase the units, remove a restatement in brackets, all whitespace and the dots at the end.
+
+    Examples: "lb/sq in." becomes "lb/sqin", "m (100.3 ft)" becomes "m".
+    """
+    if units is None:
         return ""
-    kept = []
-    for char in text.lower():
-        if char.isspace():
-            continue
-        if unicodedata.category(char).startswith("P"):
-            continue
-        kept.append(char)
-    return "".join(kept)
+    return "".join(strip_restatement(units).lower().split()).rstrip(".")
 
 
 def normalise_units(units: str | None) -> str:
-    """Lowercase the units, remove all whitespace, then apply the alias table in config."""
-    if units is None:
-        return ""
-    key = "".join(units.lower().split())
+    """Make units_key(), then apply the alias table in config."""
+    key = units_key(units)
     return config.UNIT_ALIASES.get(key, key)
 
 
-def units_match(expected: str | None, predicted: str | None) -> bool:
-    """True if the units agree. If the QA file gives no units, we do not check the units."""
-    expected_units = normalise_units(expected)
-    if expected_units == "":
-        return True
-    return expected_units == normalise_units(predicted)
+def parse_amount(value: str | None, units: str | None) -> tuple[Decimal | None, str]:
+    """Read a numeric answer. Return (the number or None, the normalised units).
+
+    Scale words in the value or in the units multiply the number. A currency sign or word
+    in the value becomes the units when the units are empty. Examples:
+      ("7.9 million", "dollars") gives (7900000, "$")
+      ("560", "$ billion") gives (560000000000, "$")
+      ("$60 million", None) gives (60000000, "$")
+      ("30.6 (100.3 ft)", "m") gives (30.6, "m")
+    """
+    text = strip_restatement(value or "").lower()
+    scale = Decimal(1)
+    currency = False
+    for sign in ("us$", "$"):
+        if text.startswith(sign):
+            text = text[len(sign) :]
+            currency = True
+            break
+    number_text, *other_words = text.split() or [""]
+    number = parse_number(number_text)
+    for word in other_words:
+        if word in SCALE_WORDS:
+            scale *= SCALE_WORDS[word]
+        elif word in CURRENCY_WORDS:
+            currency = True
+        else:
+            number = None  # for example "12 to 18" or "87 in": not a plain number
+
+    key = units_key(units)
+    for word, factor in SCALE_WORDS.items():
+        if word in key:
+            scale *= factor
+            key = key.replace(word, "")
+    if key == "" and currency:
+        key = "$"
+    key = config.UNIT_ALIASES.get(key, key)
+    return (None if number is None else number * scale), key
 
 
-def judge_answer(expected_value: str, expected_units: str, value: str | None, units: str | None) -> str:
+def text_words(text: str | None) -> set[str]:
+    """Return the set of words in text, lowercase, with unit spellings changed by the alias table.
+
+    A word is a sequence of letters and digits. A decimal point in a number stays ("10.35").
+    "_" is removed ("v_P" is "vp"), "√" is the word "sqrt" and '"' after a digit is the word "in".
+    """
+    cleaned = (text or "").lower().replace("_", "").replace("√", " sqrt ")
+    cleaned = re.sub(r'(?<=\d)\s*["″]', " in ", cleaned)
+    return {config.UNIT_ALIASES.get(word, word) for word in re.findall(r"\w+(?:\.\w+)*", cleaned)}
+
+
+def judge_answer(
+    expected_value: str,
+    expected_units: str,
+    value: str | None,
+    units: str | None,
+    accept_min: str = "",
+    accept_max: str = "",
+) -> str:
     """Compare one model answer with the expected answer. Return CORRECT, WRONG_VALUE or WRONG_UNITS.
 
-    If the expected value is a number, the answer must be a number that is exactly equal.
-    Decimal compares values, not text, so 26.4 equals 26.40 and 1150000 equals 1.15E+06.
-    If not, the answer must be equal after normalise_text().
+    Numeric expected value: the answer must be a number that is exactly equal. Decimal compares
+    values, not text, so 26.4 equals 26.40 and 1150000 equals 1.15E+06. If the QA file gives
+    accept_min and accept_max (chart readings), each number in that range, edges included, is correct.
+    A plus-minus sign must be in both answers or in neither.
+    Text expected value: the answer must contain all the words of the expected value (see text_words()).
+    Units: if the QA file gives no units, we do not check them.
     The value is checked first, so an answer with a wrong value and wrong units is WRONG_VALUE.
     """
-    expected_number = parse_number(expected_value)
+    expected_plus_minus, expected_text = split_plus_minus(expected_value)
+    expected_number, expected_key = parse_amount(expected_text, expected_units)
+
     if expected_number is not None:
-        predicted_number = parse_number(value)
-        value_ok = predicted_number == expected_number
+        plus_minus, predicted_text = split_plus_minus(value)
+        predicted_number, predicted_key = parse_amount(predicted_text, units)
+        if predicted_number is None or plus_minus != expected_plus_minus:
+            value_ok = False
+        elif accept_min and accept_max:
+            value_ok = parse_number(accept_min) <= predicted_number <= parse_number(accept_max)
+        else:
+            value_ok = predicted_number == expected_number
     else:
-        value_ok = normalise_text(expected_value) == normalise_text(value)
+        expected_words = text_words(expected_value)
+        value_ok = bool(expected_words) and expected_words <= text_words(value)
+        expected_key, predicted_key = normalise_units(expected_units), normalise_units(units)
 
     if not value_ok:
         return WRONG_VALUE
-    if not units_match(expected_units, units):
+    if expected_key != "" and expected_key != predicted_key:
         return WRONG_UNITS
     return CORRECT
 
@@ -121,6 +216,8 @@ def score_item(question: dict, record: dict | None) -> dict:
         "question": question["question"],
         "expected_value": question["expected_value"],
         "expected_units": question["units"],
+        "accepted_range": f"{question['accept_min']} to {question['accept_max']}" if question["accept_min"] else "",
+        "alt_answer": f"{question['alt_value']} {question['alt_units']}".strip(),
         "predicted_value": None,
         "predicted_units": None,
         "confidence": None,
@@ -130,6 +227,12 @@ def score_item(question: dict, record: dict | None) -> dict:
 
     if record is None:
         row["outcome"] = MISSING
+        return row
+    # The qid is the page plus a counter, so a new or moved row in the QA file can give a qid
+    # to a different question. Records from older runs have no "question", so we cannot check them.
+    if record.get("question") not in (None, question["question"]):
+        row["outcome"] = MISSING
+        row["detail"] = "the question in the QA file changed after this run"
         return row
     if record["error_type"] == "api":
         row["outcome"] = API_ERROR
@@ -149,7 +252,19 @@ def score_item(question: dict, record: dict | None) -> dict:
         row["outcome"] = NOT_FOUND
         return row
 
-    row["outcome"] = judge_answer(question["expected_value"], question["units"], answer.value, answer.units)
+    row["outcome"] = judge_answer(
+        question["expected_value"],
+        question["units"],
+        answer.value,
+        answer.units,
+        question["accept_min"],
+        question["accept_max"],
+    )
+    # The alternative answer is the same value in other units, as the page prints it
+    # (for example 100.3 ft for 30.6 m). If both comparisons fail, report the closer one.
+    if row["outcome"] != CORRECT and question["alt_value"]:
+        alt_outcome = judge_answer(question["alt_value"], question["alt_units"], answer.value, answer.units)
+        row["outcome"] = min(row["outcome"], alt_outcome, key=[CORRECT, WRONG_UNITS, WRONG_VALUE].index)
     return row
 
 
@@ -264,7 +379,9 @@ def markdown_report(runs: list[tuple[str, str, dict]]) -> str:
 
 
 def write_items_csv(path: Path, rows: list[dict]) -> None:
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    # "utf-8-sig" adds a byte-order mark. Without it, Excel reads the file as ANSI and shows
+    # characters such as σ, ° and Δ as "?" or "�". The file content is correct in both cases.
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)

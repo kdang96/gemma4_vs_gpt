@@ -27,12 +27,21 @@ skills (the `Category` column in the QA file):
 
 ## Data
 
-- `selected_pages/nasa_qa_all_100_pages/`: 80 single-page PDFs. The file name is the page ID:
+- `selected_pages/nasa_qa_all_100_pages/`: 79 single-page PDFs. The file name is the page ID:
   `<NTRS citation number>_p<page number, 3 digits>.pdf`, for example `19750006673_p010.pdf`.
 - `eval/nasa_qa_all_100.xlsx`: the answer key, one row per question (100 rows).
   Columns: `Title`, `Pages`, `Link` (NTRS citation), `Category`, `User query`,
-  `Expected Answer`, `Units`, `Page file`, `Source evidence (review only)`, `Batch`.
-  The benchmark does not send `Source evidence` to a model.
+  `Expected Answer`, `Units`, `Page file`, `Source evidence (review only)`, `Batch`,
+  `Accept min`, `Accept max`, `Alt answer`, `Alt units`. The benchmark does not send
+  `Source evidence` to a model.
+  `Accept min` and `Accept max` are filled only for chart readings that are approximate.
+  `Alt answer` and `Alt units` are filled only where the page prints the value in two units,
+  for example "30.6 m (100.3 ft)".
+  Money amounts are plain US dollar amounts with the units `USD` (for example `7900000`).
+  A row has units only if the page prints them.
+- All pages are upright. Three pages were printed sideways: `19750002863_p014` was
+  replaced with an upright copy, and `19750004869_p012` and `19750004869_p016` have
+  a PDF rotation of 90° clockwise. The renderer uses the PDF rotation.
 
 The paths are `QA_FILE` and `PAGES_DIR` in `config.py`.
 
@@ -60,25 +69,50 @@ The accuracy denominator is all questions in the QA file (100). Schema failures,
 | `not_found` | The model said that the page does not contain the answer. |
 | `schema_failure` | The model output is not a valid JSON object for the schema. |
 | `api_error` | The API call failed after all retries. |
-| `missing` | The results file has no record for the question. |
+| `missing` | The results file has no record for the question, or the question changed after the run. |
 
 **Numeric or text.** If the expected answer is a plain number (for example
-`39477`, `26.40`, `+13` or `1.15E+06`), the question is numeric. If not, it is text.
+`39477`, `26.40`, `+13`, `±2.0` or `1.15E+06`), the question is numeric. If not, it is text.
 
-**Numeric answers.** The model value must also be a plain number. Thousands
+**Numeric answers.** The model value must also be a number. Thousands
 separators (`39,477`) are permitted. The number must be **exactly** equal to the
 expected number. There is no tolerance. The scorer compares the values, not the text, so `26.4` matches `26.40`,
-`13` matches `+13` and `1150000` matches `1.15E+06`. But `39476` does not match `39477`,
-and `1960` does not match `1961`.
+`.028` matches `0.028`, `13` matches `+13` and `1150000` matches `1.15E+06`. But `39476` does not match `39477`,
+and `1.15E+06` does not match `1148000`.
 
-**Text answers.** Normalised exact match. Both strings are changed to lowercase,
-and all whitespace and punctuation is removed. Then they must be equal.
-For example, `Hysol 5189 / 3538.` matches `Hysol 5189/3538`.
+- **Chart readings.** If the row has `Accept min` and `Accept max`, each number from
+  min to max (edges included) is correct. Other rows have no range.
+- **Number words.** `zero` to `twenty` count as numbers, so `five` matches `5`.
+- **Scale words and money.** `thousand`, `million`, `billion` and `trillion` in the value or
+  in the units multiply the number. `$`, `US$`, `USD`, `dollar` and `dollars` mean US dollars.
+  So `7.9 million` with units `dollars`, `7.9` with units `$ million` and `$7.9 million`
+  all match `7900000` `USD`. A money answer without a currency (`7.9 million` and no units) is `wrong_units`.
+- **Plus-minus.** `±`, `+/-` and `+-` must be in both values or in neither.
+  `±2` matches `±2.0`, but `2.0` does not.
+- **Value in two units.** If the row has `Alt answer` and `Alt units`, that answer is also
+  correct. For `30.6` `m` with the alternative `100.3` `ft`, both `30.6 m` and `100.3 ft` are correct.
+  A second value in brackets at the end of the value or the units is ignored and not checked,
+  so units `m (100.3 ft)` count as `m`. The prompt tells the model to give one value only.
+
+**Text answers.** The model answer must contain all the words of the expected answer.
+Case, punctuation and extra words are ignored. A word is a sequence of letters and digits;
+a decimal point in a number stays in the word (`10.35`). Unit spellings in the words use
+the alias table, `"` after a digit is `in`, `√` is `sqrt` and `_` is removed. For example,
+`Hysol 5189 / 3538.` matches `Hysol 5189/3538`, and `3/8" x 3/8" on 2" centers` matches
+`3/8 in x 3/8 in on 2 in centers`.
 
 **Units.** If the `Units` cell is blank, the units are not checked. If not, the
-units must be equal after normalisation: lowercase, no whitespace, then the
-alias table `UNIT_ALIASES` in `config.py` (for example `inches` → `in`,
+units must be equal after normalisation: lowercase, no whitespace, no dot at the end, then the
+alias table `UNIT_ALIASES` in `config.py` (for example `inches` → `in`, `"` → `in`,
 `pounds` → `lb`, `N-m2` → `n*m^2`). To accept another spelling, add it to that table.
+
+**Changed questions.** Each record in a results file has the question text. If the QA file
+has a different question for that qid, the item is `missing`. Run the model again for it.
+Records from runs before this check have no question text and are not checked.
+
+**Per-item CSV.** `scores/<run>_items.csv` is UTF-8 with a byte-order mark, so Excel shows
+characters such as `σ`, `°` and `Δ` correctly. If you save the file again from Excel as
+"CSV" (not "CSV UTF-8"), Excel changes these characters to `?`.
 
 **Schema.** The model must return this JSON object (see `ModelAnswer` in `common.py`):
 
@@ -106,6 +140,12 @@ of the hardware.
 
 - The data set is small (100 questions). One question is 1 % of the accuracy.
 - Each question is asked one time. The benchmark does not measure run-to-run variation.
+- A text answer is correct if it contains all the expected words, so a long answer with
+  extra words is also correct.
+- A second value in brackets (for example the `(100.3 ft)` in `m (100.3 ft)`) is not checked.
+- Results files from before 2 November 2026 are not comparable with new runs. Since then,
+  8 questions were reworded, 6 more rows got a new expected answer or new units,
+  3 page files changed and the prompt changed. Run the models again.
 
 ## How to run
 
@@ -116,7 +156,7 @@ pip install -r requirements.txt
 ```
 
 1. Render the pages to PNG (200 DPI by default). `run.py` also does this step.
-   PNG files that exist are not rendered again.
+   A page is rendered again only if its PDF is newer than its PNG.
 
    ```bash
    python render.py --dpi 200
@@ -173,9 +213,12 @@ All prompts are in `prompts.py`.
 
 ```bash
 ruff check .
+ruff format --check .
 pytest
 ```
 
+`tests/test_score.py` tests the scoring rules. `tests/test_data.py` checks that the answer key
+and the page folder agree, and that each range and alternative answer is complete.
 The GitHub Actions workflow runs the same commands on each pull request. It does not call a model.
 
 ## Results

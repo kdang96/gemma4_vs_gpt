@@ -80,6 +80,7 @@ def call_model(client: OpenAI, args, question: dict) -> dict:
     record = {
         "qid": question["qid"],
         "page_id": question["page_id"],
+        "question": question["question"],  # score.py uses it to find records for a changed question
         "model": args.model,
         "backend": args.backend,
         "dpi": args.dpi,
