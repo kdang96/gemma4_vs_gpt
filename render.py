@@ -1,4 +1,4 @@
-"""Render each single-page PDF in selected_pages to a PNG.
+"""Render each single-page PDF in config.PAGES_DIR to a PNG.
 
 Usage: python render.py [--dpi 200]
 

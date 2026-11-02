@@ -4,6 +4,7 @@ Usage:
   python run.py --backend openai --model gpt-5
   python run.py --backend vllm --model google/gemma-4-27b-it --base-url http://localhost:8000/v1
   python run.py --backend openai --model gpt-5 --resume results/gpt-5_20261027-120000.jsonl
+  python run.py --backend openai --model gpt-5 --resume results/gpt-5_20261027-120000.jsonl --only "19630002367_p018#2"
 
 The OpenAI backend reads the API key from OPENAI_API_KEY.
 The vLLM backend reads an optional key from VLLM_API_KEY.
@@ -11,6 +12,7 @@ The vLLM backend reads an optional key from VLLM_API_KEY.
 
 import argparse
 import base64
+import difflib
 import json
 import os
 import random
@@ -27,6 +29,7 @@ import config
 import prompts
 import render
 from common import ModelAnswer, load_questions, parse_answer
+from costs import TokenUsage, calculate_cost
 
 # Errors that can go away if we wait and try again.
 RETRY_ERRORS = (openai.RateLimitError, openai.APIConnectionError, openai.InternalServerError)
@@ -47,17 +50,31 @@ def make_client(backend: str, base_url: str | None) -> OpenAI:
     return OpenAI(base_url=base_url, api_key=os.environ.get("VLLM_API_KEY", "EMPTY"), max_retries=0)
 
 
+def check_model(client: OpenAI, model: str) -> None:
+    """Stop before the first question if the server does not have the model.
+
+    Without this check, a wrong name (for example "31b" for "31B") gives an API error for each question.
+    """
+    try:
+        names = sorted(m.id for m in client.models.list())
+    except openai.APIError as e:
+        raise SystemExit(f"Cannot get the model list from the server: {type(e).__name__}: {e}") from e
+    if model not in names:
+        close = difflib.get_close_matches(model, names, n=3)
+        hint = f" Close names: {', '.join(close)}." if close else ""
+        raise SystemExit(f"The server has no model {model!r}.{hint} Use a name from GET /v1/models.")
+
+
 def image_data_url(png: Path) -> str:
     return "data:image/png;base64," + base64.b64encode(png.read_bytes()).decode("ascii")
 
 
-def estimate_cost(backend: str, model: str, input_tokens: int, output_tokens: int) -> float | None:
+def estimate_cost(backend: str, model: str, usage: TokenUsage) -> float | None:
     if backend == "vllm":
         return 0.0
-    if model not in config.PRICES_PER_1M_TOKENS:
+    if model not in config.PRICES:
         return None
-    input_price, output_price = config.PRICES_PER_1M_TOKENS[model]
-    return (input_tokens * input_price + output_tokens * output_price) / 1_000_000
+    return calculate_cost(usage, config.PRICES[model])
 
 
 def call_model(client: OpenAI, args, question: dict) -> dict:
@@ -76,13 +93,19 @@ def call_model(client: OpenAI, args, question: dict) -> dict:
     request = {"model": args.model, "messages": messages, "response_format": RESPONSE_FORMAT}
     if args.temperature is not None:
         request["temperature"] = args.temperature
+    max_soft_tokens = args.max_soft_tokens if args.backend == "vllm" else None
+    if max_soft_tokens is not None:
+        # vLLM gives mm_processor_kwargs to the image processor of the model for this request only.
+        request["extra_body"] = {"mm_processor_kwargs": {"max_soft_tokens": max_soft_tokens}}
 
     record = {
         "qid": question["qid"],
         "page_id": question["page_id"],
+        "question": question["question"],  # score.py uses it to find records for a changed question
         "model": args.model,
         "backend": args.backend,
         "dpi": args.dpi,
+        "max_soft_tokens": max_soft_tokens,  # None for the OpenAI backend
         "timestamp": datetime.now(UTC).isoformat(),
         "raw_response": None,
         "finish_reason": None,
@@ -92,6 +115,7 @@ def call_model(client: OpenAI, args, question: dict) -> dict:
         "latency_s": None,
         "input_tokens": None,
         "output_tokens": None,
+        "cached_input_tokens": None,
         "cost_usd": None,
     }
 
@@ -119,9 +143,18 @@ def call_model(client: OpenAI, args, question: dict) -> dict:
     record["raw_response"] = choice.message.content
     record["finish_reason"] = choice.finish_reason
     if response.usage is not None:
-        record["input_tokens"] = response.usage.prompt_tokens
-        record["output_tokens"] = response.usage.completion_tokens
-        record["cost_usd"] = estimate_cost(args.backend, args.model, record["input_tokens"], record["output_tokens"])
+        # The output tokens include the reasoning tokens. OpenAI bills them as output.
+        # vLLM can send no prompt_tokens_details.
+        details = response.usage.prompt_tokens_details
+        usage = TokenUsage(
+            input_tokens=response.usage.prompt_tokens,
+            output_tokens=response.usage.completion_tokens,
+            cached_input_tokens=(details.cached_tokens or 0) if details else 0,
+        )
+        record["input_tokens"] = usage.input_tokens
+        record["output_tokens"] = usage.output_tokens
+        record["cached_input_tokens"] = usage.cached_input_tokens
+        record["cost_usd"] = estimate_cost(args.backend, args.model, usage)
 
     answer, error = parse_answer(choice.message.content)
     if answer is None:
@@ -160,17 +193,35 @@ def main():
         default=None,
         help="not sent if not set (some OpenAI reasoning models accept only the default)",
     )
+    parser.add_argument(
+        "--max-soft-tokens",
+        type=int,
+        default=config.VLLM_MAX_SOFT_TOKENS,
+        help="vllm backend only: maximum visual tokens for one image (Gemma 4: 70, 140, 280, 560 or 1120)",
+    )
     parser.add_argument("--resume", type=Path, help="results file of a run that stopped")
     parser.add_argument("--limit", type=int, help="ask only the first N questions (for a test)")
+    parser.add_argument(
+        "--only",
+        nargs="+",
+        default=[],
+        metavar="QID",
+        help="ask only these questions, also if the --resume file has them (score.py uses the last record of a qid)",
+    )
     args = parser.parse_args()
 
     questions = load_questions()
+    if args.only:
+        unknown = set(args.only) - {q["qid"] for q in questions}
+        if unknown:
+            parser.error(f"qids not in the QA file: {', '.join(sorted(unknown))}")
+        questions = [q for q in questions if q["qid"] in args.only]
     if args.limit:
         questions = questions[: args.limit]
 
     if args.resume:
         results_path = args.resume
-        done = completed_qids(results_path)
+        done = completed_qids(results_path) - set(args.only)
         # If the last run stopped during a write, start on a new line.
         text = results_path.read_text(encoding="utf-8")
         if text and not text.endswith("\n"):
@@ -186,10 +237,12 @@ def main():
     todo = [q for q in questions if q["qid"] not in done]
     print(f"{len(todo)} questions to ask, {len(done)} already done. Output: {results_path}")
 
+    client = make_client(args.backend, args.base_url)
+    check_model(client, args.model)
+
     # Render before the threads start, so that two threads never write the same PNG.
     render.render_all(args.dpi)
 
-    client = make_client(args.backend, args.base_url)
     with open(results_path, "a", encoding="utf-8") as out, ThreadPoolExecutor(args.concurrency) as pool:
         futures = [pool.submit(call_model, client, args, q) for q in todo]
         # Only this loop (the main thread) writes to the file.

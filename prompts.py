@@ -13,6 +13,8 @@ and optional E-notation (for example 1.15E+06). Do not use thousands separators.
   - For text, copy the text as it is on the page.
 - "units": the units of the value as the page shows them (for example "ft", "%", "LB/IN"). \
 Use null if the value has no units.
+- If the page gives the value in two units (for example "10.0 m (32.8 ft)"), give one value and its units only. \
+Do not put the second value in "value" or "units".
 - "found": false if the page does not contain the answer. Then "value" and "units" must be null.
 - "confidence": "high", "medium" or "low". This is how sure you are of the value.
 """
