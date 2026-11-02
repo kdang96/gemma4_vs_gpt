@@ -13,6 +13,7 @@ import csv
 import json
 import math
 import re
+import unicodedata
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -79,13 +80,13 @@ def parse_number(text: str | None) -> Decimal | None:
     return number
 
 
-def split_plus_minus(text: str | None) -> tuple[bool, str]:
-    """Remove a leading plus-minus sign. Return (True if there was one, the remaining text)."""
+def strip_plus_minus(text: str | None) -> str:
+    """Remove a leading plus-minus sign, so that "±1" is read as "1". A minus sign stays."""
     stripped = (text or "").strip()
     for sign in PLUS_MINUS_SIGNS:
         if stripped.startswith(sign):
-            return True, stripped[len(sign) :].strip()
-    return False, stripped
+            return stripped[len(sign) :].strip()
+    return stripped
 
 
 def strip_restatement(text: str) -> str:
@@ -157,9 +158,11 @@ def text_words(text: str | None) -> set[str]:
 
     A word is a sequence of letters and digits. A decimal point in a number stays ("10.35").
     "_" is removed ("v_P" is "vp"), "√" is the word "sqrt" and '"' after a digit is the word "in".
+    Unicode NFKC changes subscript and superscript characters to plain ones ("Vₚ" is "vp").
     """
     cleaned = (text or "").lower().replace("_", "").replace("√", " sqrt ")
     cleaned = re.sub(r'(?<=\d)\s*["″]', " in ", cleaned)
+    cleaned = unicodedata.normalize("NFKC", cleaned)  # after the '″' change, because NFKC changes '″' to two primes
     return {config.UNIT_ALIASES.get(word, word) for word in re.findall(r"\w+(?:\.\w+)*", cleaned)}
 
 
@@ -176,18 +179,16 @@ def judge_answer(
     Numeric expected value: the answer must be a number that is exactly equal. Decimal compares
     values, not text, so 26.4 equals 26.40 and 1150000 equals 1.15E+06. If the QA file gives
     accept_min and accept_max (chart readings), each number in that range, edges included, is correct.
-    A plus-minus sign must be in both answers or in neither.
+    A leading plus-minus sign is ignored, so "±1" is equal to "1". A minus sign is not ignored.
     Text expected value: the answer must contain all the words of the expected value (see text_words()).
     Units: if the QA file gives no units, we do not check them.
     The value is checked first, so an answer with a wrong value and wrong units is WRONG_VALUE.
     """
-    expected_plus_minus, expected_text = split_plus_minus(expected_value)
-    expected_number, expected_key = parse_amount(expected_text, expected_units)
+    expected_number, expected_key = parse_amount(strip_plus_minus(expected_value), expected_units)
 
     if expected_number is not None:
-        plus_minus, predicted_text = split_plus_minus(value)
-        predicted_number, predicted_key = parse_amount(predicted_text, units)
-        if predicted_number is None or plus_minus != expected_plus_minus:
+        predicted_number, predicted_key = parse_amount(strip_plus_minus(value), units)
+        if predicted_number is None:
             value_ok = False
         elif accept_min and accept_max:
             value_ok = parse_number(accept_min) <= predicted_number <= parse_number(accept_max)

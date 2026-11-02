@@ -51,6 +51,7 @@ UNIT_ALIASES = {
     "poundsperinch": "lb/in",
     "hertz": "hz",
     "percent": "%",
+    "percentage": "%",
     "pct": "%",
     "usd": "$",
     "dollar": "$",

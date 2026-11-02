@@ -72,7 +72,7 @@ The accuracy denominator is all questions in the QA file (100). Schema failures,
 | `missing` | The results file has no record for the question, or the question changed after the run. |
 
 **Numeric or text.** If the expected answer is a plain number (for example
-`39477`, `26.40`, `+13`, `±2.0` or `1.15E+06`), the question is numeric. If not, it is text.
+`39477`, `26.40`, `+13` or `1.15E+06`), the question is numeric. If not, it is text.
 
 **Numeric answers.** The model value must also be a number. Thousands
 separators (`39,477`) are permitted. The number must be **exactly** equal to the
@@ -87,8 +87,8 @@ and `1.15E+06` does not match `1148000`.
   in the units multiply the number. `$`, `US$`, `USD`, `dollar` and `dollars` mean US dollars.
   So `7.9 million` with units `dollars`, `7.9` with units `$ million` and `$7.9 million`
   all match `7900000` `USD`. A money answer without a currency (`7.9 million` and no units) is `wrong_units`.
-- **Plus-minus.** `±`, `+/-` and `+-` must be in both values or in neither.
-  `±2` matches `±2.0`, but `2.0` does not.
+- **Plus-minus.** A `±`, `+/-` or `+-` at the start of the value is ignored, so `±1`, `+/-1`
+  and `1` all match `1`. A minus sign is not ignored: `-4` does not match `4`.
 - **Value in two units.** If the row has `Alt answer` and `Alt units`, that answer is also
   correct. For `30.6` `m` with the alternative `100.3` `ft`, both `30.6 m` and `100.3 ft` are correct.
   A second value in brackets at the end of the value or the units is ignored and not checked,
@@ -97,7 +97,8 @@ and `1.15E+06` does not match `1148000`.
 **Text answers.** The model answer must contain all the words of the expected answer.
 Case, punctuation and extra words are ignored. A word is a sequence of letters and digits;
 a decimal point in a number stays in the word (`10.35`). Unit spellings in the words use
-the alias table, `"` after a digit is `in`, `√` is `sqrt` and `_` is removed. For example,
+the alias table, `"` after a digit is `in`, `√` is `sqrt` and `_` is removed. Subscript and
+superscript characters become plain characters (Unicode NFKC), so `Vₚ` is `vp`. For example,
 `Hysol 5189 / 3538.` matches `Hysol 5189/3538`, and `3/8" x 3/8" on 2" centers` matches
 `3/8 in x 3/8 in on 2 in centers`.
 
@@ -143,9 +144,6 @@ of the hardware.
 - A text answer is correct if it contains all the expected words, so a long answer with
   extra words is also correct.
 - A second value in brackets (for example the `(100.3 ft)` in `m (100.3 ft)`) is not checked.
-- Results files from before 2 November 2026 are not comparable with new runs. Since then,
-  8 questions were reworded, 6 more rows got a new expected answer or new units,
-  3 page files changed and the prompt changed. Run the models again.
 
 ## How to run
 
@@ -187,6 +185,15 @@ pip install -r requirements.txt
    python run.py --backend openai --model gpt-5 --resume results/gpt-5_20261027-120000.jsonl
    ```
 
+   To ask some questions again (for example after a change to the QA file), give their qids
+   with `--only`. The new records are added to the end of the file. `score.py` uses the last
+   record of each qid, so the new answer replaces the old one. The cost and latency of the old
+   call are then not in the summary.
+
+   ```bash
+   python run.py --backend openai --model gpt-5 --resume results/gpt-5_20261027-120000.jsonl --only "19750006673_p020#1" "19630002367_p018#2"
+   ```
+
 5. Score all runs in `results/`, or give the files:
 
    ```bash
@@ -205,6 +212,7 @@ Other options:
 | `--concurrency` | `run.py` | 4 | Number of calls at the same time. |
 | `--temperature` | `run.py` | not sent | Sampling temperature. Some OpenAI reasoning models accept only the default. |
 | `--limit N` | `run.py` | all | Ask only the first N questions (for a test). |
+| `--only QID ...` | `run.py` | all | Ask only these questions. With `--resume`, ask them again also if they are done. |
 
 Rate limits and server errors get up to 6 attempts with exponential backoff.
 All prompts are in `prompts.py`.

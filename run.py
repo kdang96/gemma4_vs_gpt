@@ -4,6 +4,7 @@ Usage:
   python run.py --backend openai --model gpt-5
   python run.py --backend vllm --model google/gemma-4-27b-it --base-url http://localhost:8000/v1
   python run.py --backend openai --model gpt-5 --resume results/gpt-5_20261027-120000.jsonl
+  python run.py --backend openai --model gpt-5 --resume results/gpt-5_20261027-120000.jsonl --only "19630002367_p018#2"
 
 The OpenAI backend reads the API key from OPENAI_API_KEY.
 The vLLM backend reads an optional key from VLLM_API_KEY.
@@ -173,15 +174,27 @@ def main():
     )
     parser.add_argument("--resume", type=Path, help="results file of a run that stopped")
     parser.add_argument("--limit", type=int, help="ask only the first N questions (for a test)")
+    parser.add_argument(
+        "--only",
+        nargs="+",
+        default=[],
+        metavar="QID",
+        help="ask only these questions, also if the --resume file has them (score.py uses the last record of a qid)",
+    )
     args = parser.parse_args()
 
     questions = load_questions()
+    if args.only:
+        unknown = set(args.only) - {q["qid"] for q in questions}
+        if unknown:
+            parser.error(f"qids not in the QA file: {', '.join(sorted(unknown))}")
+        questions = [q for q in questions if q["qid"] in args.only]
     if args.limit:
         questions = questions[: args.limit]
 
     if args.resume:
         results_path = args.resume
-        done = completed_qids(results_path)
+        done = completed_qids(results_path) - set(args.only)
         # If the last run stopped during a write, start on a new line.
         text = results_path.read_text(encoding="utf-8")
         if text and not text.endswith("\n"):

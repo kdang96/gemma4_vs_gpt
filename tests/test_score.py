@@ -157,11 +157,15 @@ def test_money_amounts(value, units, outcome):
 # --- plus-minus -------------------------------------------------------------
 
 
-def test_plus_minus_must_agree():
-    assert score.judge_answer("±2.0", "g", "±2", "g") == score.CORRECT
-    assert score.judge_answer("±2.0", "g", "+/-2.0", "g") == score.CORRECT
-    assert score.judge_answer("±2.0", "g", "2.0", "g") == score.WRONG_VALUE
-    assert score.judge_answer("2.0", "g", "±2.0", "g") == score.WRONG_VALUE
+@pytest.mark.parametrize("value", ["1", "±1", "+/-1", "+- 1", "± 1.0"])
+def test_plus_minus_sign_is_ignored(value):
+    assert score.judge_answer("1", "deg", value, "°") == score.CORRECT
+
+
+def test_minus_sign_is_not_ignored():
+    assert score.judge_answer("4", "", "-4", None) == score.WRONG_VALUE
+    assert score.judge_answer("-4", "", "4", None) == score.WRONG_VALUE
+    assert score.judge_answer("1", "deg", "±-1", "deg") == score.WRONG_VALUE
 
 
 # --- units ------------------------------------------------------------------
@@ -220,6 +224,7 @@ def test_text_words_use_unit_aliases_and_symbols():
     equation = "VP = 10.35 sqrt(p)"
     assert score.judge_answer(equation, "", "v_P = 10.35 sqrt(p)", None) == score.CORRECT
     assert score.judge_answer(equation, "", "V_P = 10.35√P", None) == score.CORRECT
+    assert score.judge_answer(equation, "", "Vₚ = 10.35√p", None) == score.CORRECT  # subscript p
     assert score.judge_answer(equation, "", "VP = 9 sqrt(p)", None) == score.WRONG_VALUE
 
 
@@ -254,6 +259,8 @@ def test_valid_response_is_scored():
     row = score.score_item(make_question("43", "%"), make_record(answer_json("43.0", "percent")))
     assert row["outcome"] == score.CORRECT
     assert row["predicted_value"] == "43.0"
+    row = score.score_item(make_question("82", "%"), make_record(answer_json("82", "percentage")))
+    assert row["outcome"] == score.CORRECT
 
 
 def test_not_found():
