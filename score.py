@@ -59,16 +59,29 @@ NUMBER_WORDS = {
 
 PLUS_MINUS_SIGNS = ("±", "+/-", "+-")
 
+# "1.148 x 10^6", "1.148X10**6" and "1.148×10⁶" are the same number as "1.148E6".
+# The exponent must have "^", "**" or superscript digits, so "2 x 105" is not read as 2E5.
+SUPERSCRIPT_DIGITS = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
+SUPERSCRIPT_POWER = re.compile(r"10([⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+)")
+TIMES_TEN_POWER = re.compile(r"(\d)\s*[x×*·]\s*10\s*(?:\^|\*\*)\s*([+\-−]?\d+)\b", re.IGNORECASE)
+
+
+def times_ten_to_e(text: str) -> str:
+    """Change a power of ten to E notation, for example "1.148X10^6" to "1.148e6"."""
+    text = SUPERSCRIPT_POWER.sub(lambda m: "10^" + m.group(1).translate(SUPERSCRIPT_DIGITS), text)
+    return TIMES_TEN_POWER.sub(lambda m: f"{m.group(1)}e{m.group(2).replace('−', '-')}", text)
+
 
 def parse_number(text: str | None) -> Decimal | None:
     """Return text as a Decimal, or None if text is not a plain number.
 
-    Accepts "39477", "39,477", "+13", "26.40", ".028", "1.15E+06" and number words from "zero" to "twenty".
-    Rejects "87 in", "about 3", "NaN" and "Infinity".
+    Accepts "39477", "39,477", "+13", "26.40", ".028", "1.15E+06", "1.148X10^6", "1.148×10⁶"
+    and number words from "zero" to "twenty".
+    Rejects "87 in", "about 3", "2 x 105", "NaN" and "Infinity".
     """
     if text is None:
         return None
-    cleaned = text.strip().replace(",", "")  # remove thousands separators
+    cleaned = times_ten_to_e(text.strip()).replace(",", "")  # remove thousands separators
     if cleaned.lower() in NUMBER_WORDS:
         return NUMBER_WORDS[cleaned.lower()]
     try:
@@ -99,13 +112,16 @@ def strip_restatement(text: str) -> str:
 
 
 def units_key(units: str | None) -> str:
-    """Lowercase the units, remove a restatement in brackets, all whitespace and the dots at the end.
+    """Lowercase the units, remove a restatement in brackets, all whitespace, the dots at the end
+    and a "unit -" label at the start.
 
-    Examples: "lb/sq in." becomes "lb/sqin", "m (100.3 ft)" becomes "m".
+    Examples: "lb/sq in." becomes "lb/sqin", "m (100.3 ft)" becomes "m", "UNIT - G^2" becomes "g^2".
+    Some axis labels print the units as "(UNIT - G²)", and the prompt tells the model to copy the units.
     """
     if units is None:
         return ""
-    return "".join(strip_restatement(units).lower().split()).rstrip(".")
+    key = "".join(strip_restatement(units).lower().split()).rstrip(".")
+    return re.sub(r"^units?-", "", key)
 
 
 def normalise_units(units: str | None) -> str:
@@ -123,8 +139,9 @@ def parse_amount(value: str | None, units: str | None) -> tuple[Decimal | None, 
       ("560", "$ billion") gives (560000000000, "$")
       ("$60 million", None) gives (60000000, "$")
       ("30.6 (100.3 ft)", "m") gives (30.6, "m")
+      ("1.148 x 10^6", "N-m2") gives (1148000, "n*m^2")
     """
-    text = strip_restatement(value or "").lower()
+    text = times_ten_to_e(strip_restatement(value or "")).lower()
     scale = Decimal(1)
     currency = False
     for sign in ("us$", "$"):
@@ -313,6 +330,8 @@ def summarise(rows: list[dict], records: dict[str, dict]) -> dict:
     # Latency and cost come only from calls that got a response from the API.
     answered = [r for r in records.values() if r["error_type"] != "api"]
     latencies = [r["latency_s"] for r in answered if r["latency_s"] is not None]
+    # The input tokens are mostly image tokens. A low value shows that the model got a small image.
+    input_tokens = [r["input_tokens"] for r in answered if r.get("input_tokens") is not None]
     costs = [r["cost_usd"] for r in answered]
     total_cost = None if None in costs else sum(costs)  # None if a model has no price
 
@@ -324,6 +343,7 @@ def summarise(rows: list[dict], records: dict[str, dict]) -> dict:
         "per_category": per_category,
         "mean_latency_s": sum(latencies) / len(latencies) if latencies else None,
         "p95_latency_s": percentile(latencies, 95),
+        "mean_input_tokens": sum(input_tokens) / len(input_tokens) if input_tokens else None,
         "total_cost_usd": total_cost,
     }
 
@@ -349,6 +369,7 @@ def markdown_report(runs: list[tuple[str, str, dict]]) -> str:
         "Schema failure rate",
         "Mean latency (s)",
         "p95 latency (s)",
+        "Mean input tokens",
         "Total cost (USD)",
     ]
     lines.append("| " + " | ".join(header) + " |")
@@ -356,7 +377,8 @@ def markdown_report(runs: list[tuple[str, str, dict]]) -> str:
     for name, model, s in runs:
         lines.append(
             f"| {name} | {model} | {s['total']} | {s['accuracy']:.1%} | {s['schema_failure_rate']:.1%} "
-            f"| {fmt(s['mean_latency_s'], 2)} | {fmt(s['p95_latency_s'], 2)} | {fmt(s['total_cost_usd'], 4)} |"
+            f"| {fmt(s['mean_latency_s'], 2)} | {fmt(s['p95_latency_s'], 2)} | {fmt(s['mean_input_tokens'], 0)} "
+            f"| {fmt(s['total_cost_usd'], 4)} |"
         )
 
     lines += ["", "Accuracy per category (correct / total):", ""]

@@ -12,6 +12,7 @@ The vLLM backend reads an optional key from VLLM_API_KEY.
 
 import argparse
 import base64
+import difflib
 import json
 import os
 import random
@@ -49,6 +50,21 @@ def make_client(backend: str, base_url: str | None) -> OpenAI:
     return OpenAI(base_url=base_url, api_key=os.environ.get("VLLM_API_KEY", "EMPTY"), max_retries=0)
 
 
+def check_model(client: OpenAI, model: str) -> None:
+    """Stop before the first question if the server does not have the model.
+
+    Without this check, a wrong name (for example "31b" for "31B") gives an API error for each question.
+    """
+    try:
+        names = sorted(m.id for m in client.models.list())
+    except openai.APIError as e:
+        raise SystemExit(f"Cannot get the model list from the server: {type(e).__name__}: {e}") from e
+    if model not in names:
+        close = difflib.get_close_matches(model, names, n=3)
+        hint = f" Close names: {', '.join(close)}." if close else ""
+        raise SystemExit(f"The server has no model {model!r}.{hint} Use a name from GET /v1/models.")
+
+
 def image_data_url(png: Path) -> str:
     return "data:image/png;base64," + base64.b64encode(png.read_bytes()).decode("ascii")
 
@@ -77,6 +93,10 @@ def call_model(client: OpenAI, args, question: dict) -> dict:
     request = {"model": args.model, "messages": messages, "response_format": RESPONSE_FORMAT}
     if args.temperature is not None:
         request["temperature"] = args.temperature
+    max_soft_tokens = args.max_soft_tokens if args.backend == "vllm" else None
+    if max_soft_tokens is not None:
+        # vLLM gives mm_processor_kwargs to the image processor of the model for this request only.
+        request["extra_body"] = {"mm_processor_kwargs": {"max_soft_tokens": max_soft_tokens}}
 
     record = {
         "qid": question["qid"],
@@ -85,6 +105,7 @@ def call_model(client: OpenAI, args, question: dict) -> dict:
         "model": args.model,
         "backend": args.backend,
         "dpi": args.dpi,
+        "max_soft_tokens": max_soft_tokens,  # None for the OpenAI backend
         "timestamp": datetime.now(UTC).isoformat(),
         "raw_response": None,
         "finish_reason": None,
@@ -172,6 +193,12 @@ def main():
         default=None,
         help="not sent if not set (some OpenAI reasoning models accept only the default)",
     )
+    parser.add_argument(
+        "--max-soft-tokens",
+        type=int,
+        default=config.VLLM_MAX_SOFT_TOKENS,
+        help="vllm backend only: maximum visual tokens for one image (Gemma 4: 70, 140, 280, 560 or 1120)",
+    )
     parser.add_argument("--resume", type=Path, help="results file of a run that stopped")
     parser.add_argument("--limit", type=int, help="ask only the first N questions (for a test)")
     parser.add_argument(
@@ -210,10 +237,12 @@ def main():
     todo = [q for q in questions if q["qid"] not in done]
     print(f"{len(todo)} questions to ask, {len(done)} already done. Output: {results_path}")
 
+    client = make_client(args.backend, args.base_url)
+    check_model(client, args.model)
+
     # Render before the threads start, so that two threads never write the same PNG.
     render.render_all(args.dpi)
 
-    client = make_client(args.backend, args.base_url)
     with open(results_path, "a", encoding="utf-8") as out, ThreadPoolExecutor(args.concurrency) as pool:
         futures = [pool.submit(call_model, client, args, q) for q in todo]
         # Only this loop (the main thread) writes to the file.

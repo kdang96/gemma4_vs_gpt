@@ -15,12 +15,20 @@ DEFAULT_DPI = 200
 DEFAULT_CONCURRENCY = 4
 MAX_ATTEMPTS = 6  # attempts per call when the API gives a rate limit or server error
 
+# Maximum number of visual tokens for one image on the vLLM backend (Gemma 4 "max_soft_tokens").
+# Gemma 4 accepts 70, 140, 280, 560 or 1120. The default of the model is 280, which is too small
+# for a dense scanned page: the model cannot read the digits in a table at that budget.
+# run.py sends this value with each request. The results file records it.
+VLLM_MAX_SOFT_TOKENS = 1120
+
 # USD per 1 million tokens: input, output and cached input.
 # Prices are from third-party summaries, not from OpenAI. Make sure that they
 # agree with https://openai.com/api/pricing before you report a cost.
 # A model that is not in this table gets cost "n/a".
 # The local vLLM backend always costs 0 USD (hardware cost is not included).
 PRICES = {
+    "gpt-6-astra": ModelPrice(input_per_million=10.00, output_per_million=50.00, cached_input_per_million=1.00),
+    "gpt-6.1-terra": ModelPrice(input_per_million=1.00, output_per_million=5.00, cached_input_per_million=0.05),
     "gpt-5.5": ModelPrice(input_per_million=5.00, output_per_million=30.00, cached_input_per_million=0.50),
     "gpt-5.4": ModelPrice(input_per_million=2.50, output_per_million=15.00, cached_input_per_million=0.25),
     "gpt-5.4-mini": ModelPrice(input_per_million=0.75, output_per_million=4.50, cached_input_per_million=0.075),
@@ -102,9 +110,12 @@ UNIT_ALIASES = {
     "mins": "min",
     "gigahertz": "ghz",
     "°": "deg",
+    "º": "deg",  # the ordinal sign, a look-alike of the degree sign
+    "˚": "deg",  # the ring above, a look-alike of the degree sign
     "degree": "deg",
     "degrees": "deg",
     "°f": "degf",
+    "f": "degf",  # "250 F". No unit in the QA file is farad.
     "degreesf": "degf",
     "degreesfahrenheit": "degf",
     "knots": "kt",

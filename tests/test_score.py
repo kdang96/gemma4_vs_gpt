@@ -65,7 +65,25 @@ def test_parse_number_accepts_plain_numbers(text, expected):
     assert score.parse_number(text) == expected
 
 
-@pytest.mark.parametrize("text", [None, "", "87 in", "about 3", "NaN", "Infinity", "1925Z-0014Z/15"])
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("1.148X10^6", Decimal("1148000")),
+        ("1.148 x 10^6", Decimal("1148000")),
+        ("1.148×10⁶", Decimal("1148000")),
+        ("1.148*10**6", Decimal("1148000")),
+        ("2.5 x 10^-3", Decimal("0.0025")),
+        ("2.5×10⁻³", Decimal("0.0025")),
+        ("2.5 × 10^−3", Decimal("0.0025")),
+    ],
+)
+def test_parse_number_accepts_power_of_ten(text, expected):
+    assert score.parse_number(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text", [None, "", "87 in", "about 3", "2 x 105", "2 x 10", "NaN", "Infinity", "1925Z-0014Z/15"]
+)
 def test_parse_number_rejects_non_numbers(text):
     assert score.parse_number(text) is None
 
@@ -83,6 +101,9 @@ def test_parse_number_rejects_non_numbers(text):
         ("26.40", "26.4", True),  # same value, different text
         ("+13", "13", True),
         ("1.15E+06", "1150000", True),
+        ("1148000", "1.148X10^6", True),  # 19750002863_p011 prints "1.148X10^6"
+        ("1148000", "1.148 x 10^6", True),
+        ("1148000", "1.15 x 10^6", False),
         ("0.488", "0.4881", False),
     ],
 )
@@ -190,11 +211,23 @@ def test_unit_aliases_and_case():
     assert score.judge_answer("195", "fps", "195", "ft/sec") == score.CORRECT
     assert score.judge_answer("790", "sq ft", "790", "ft²") == score.CORRECT
     assert score.judge_answer("250", "°F", "250", "deg F") == score.CORRECT
+    assert score.judge_answer("250", "°F", "250", "F") == score.CORRECT
     assert score.judge_answer("15", "deg", "15", "°") == score.CORRECT
+    assert score.judge_answer("15", "deg", "15", "º") == score.CORRECT  # ordinal sign
+    assert score.judge_answer("15", "deg", "15", "˚") == score.CORRECT  # ring above
     assert score.judge_answer("15", "deg", "15", "°F") == score.WRONG_UNITS
+    assert score.judge_answer("15", "deg", "15", "o") == score.WRONG_UNITS
     assert score.judge_answer("25.2", "in", "25.2", '"') == score.CORRECT
     assert score.judge_answer("350", "lb/sq in", "350", "lb/sq in.") == score.CORRECT
     assert score.judge_answer("12", "s", "12", "sec.") == score.CORRECT
+
+
+def test_unit_label_at_the_start_is_ignored():
+    # Figure 23 of 19750001982 prints the axis units as "(UNIT - G²)".
+    assert score.units_key("UNIT - G^2") == "g^2"
+    assert score.judge_answer("0.64", "G^2", "0.62", "UNIT - G^2", "0.62", "0.66") == score.CORRECT
+    assert score.judge_answer("0.64", "G^2", "0.64", "units - G²") == score.CORRECT
+    assert score.judge_answer("0.64", "G^2", "0.64", "UNIT - G") == score.WRONG_UNITS
 
 
 def test_blank_expected_units_are_not_checked():
@@ -337,3 +370,12 @@ def test_summarise_counts_schema_failures_in_accuracy_denominator():
     assert summary["accuracy"] == 0.5
     assert summary["schema_failure_rate"] == 0.5
     assert summary["per_category"] == {"table_multi_condition": (1, 2)}
+
+
+def test_summarise_gives_mean_input_tokens():
+    rows = [score.score_item(make_question("3"), make_record(answer_json("3")))]
+    records = {"page#1": make_record(answer_json("3")), "page#2": make_record(answer_json("4"))}
+    records["page#1"]["input_tokens"] = 600
+    records["page#2"]["input_tokens"] = 1400
+    assert score.summarise(rows, records)["mean_input_tokens"] == 1000
+    assert score.summarise(rows, {"page#1": make_record(answer_json("3"))})["mean_input_tokens"] is None
