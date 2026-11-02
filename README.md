@@ -66,14 +66,10 @@ The accuracy denominator is all questions in the QA file (100). Schema failures,
 `39477`, `26.40`, `+13` or `1.15E+06`), the question is numeric. If not, it is text.
 
 **Numeric answers.** The model value must also be a plain number. Thousands
-separators (`39,477`) are permitted. By default the number must be **exactly** equal to the
-expected number. The scorer compares the values, not the text, so `26.4` matches `26.40`,
+separators (`39,477`) are permitted. The number must be **exactly** equal to the
+expected number. There is no tolerance. The scorer compares the values, not the text, so `26.4` matches `26.40`,
 `13` matches `+13` and `1150000` matches `1.15E+06`. But `39476` does not match `39477`,
 and `1960` does not match `1961`.
-
-A relative tolerance is available for experiments: `--tolerance 0.01` accepts
-`|predicted - expected| <= 0.01 * |expected|`. The edge counts as a match. The scorer uses
-`Decimal`, not `float`, so values at the edge do not fail because of float rounding.
 
 **Text answers.** Normalised exact match. Both strings are changed to lowercase,
 and all whitespace and punctuation is removed. Then they must be equal.
@@ -169,7 +165,6 @@ Other options:
 | `--concurrency` | `run.py` | 4 | Number of calls at the same time. |
 | `--temperature` | `run.py` | not sent | Sampling temperature. Some OpenAI reasoning models accept only the default. |
 | `--limit N` | `run.py` | all | Ask only the first N questions (for a test). |
-| `--tolerance` | `score.py` | 0 (exact) | Relative tolerance for numeric answers. |
 
 Rate limits and server errors get up to 6 attempts with exponential backoff.
 All prompts are in `prompts.py`.

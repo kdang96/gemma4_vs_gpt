@@ -12,7 +12,6 @@ RESULTS_DIR = ROOT / "results"
 SCORES_DIR = ROOT / "scores"
 
 DEFAULT_DPI = 200
-DEFAULT_TOLERANCE = 0.0  # 0 = numeric answers must be exact (26.4 and 26.40 are equal)
 DEFAULT_CONCURRENCY = 4
 MAX_ATTEMPTS = 6  # attempts per call when the API gives a rate limit or server error
 

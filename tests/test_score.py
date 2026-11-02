@@ -3,11 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-import config
 import score
-
-TOL = Decimal("0.01")
-EXACT = config.DEFAULT_TOLERANCE
 
 
 def make_question(expected_value, units="", category="table_multi_condition"):
@@ -59,11 +55,7 @@ def test_parse_number_rejects_non_numbers(text):
     assert score.parse_number(text) is None
 
 
-# --- default: exact numeric match -------------------------------------------
-
-
-def test_default_tolerance_is_exact():
-    assert EXACT == 0
+# --- exact numeric match ----------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -79,95 +71,61 @@ def test_default_tolerance_is_exact():
         ("0.488", "0.4881", False),
     ],
 )
-def test_default_is_exact_match(expected, predicted, is_match):
-    outcome = score.judge_answer(expected, "", predicted, None, EXACT)
+def test_numeric_is_exact_match(expected, predicted, is_match):
+    outcome = score.judge_answer(expected, "", predicted, None)
     assert (outcome == score.CORRECT) == is_match
-
-
-# --- optional relative tolerance (--tolerance 0.01) -------------------------
-
-
-@pytest.mark.parametrize(
-    "predicted, is_match",
-    [
-        ("100", True),
-        ("101", True),  # exactly +1 %: the edge counts as a match
-        ("99", True),  # exactly -1 %
-        ("101.01", False),  # just above +1 %
-        ("98.99", False),  # just below -1 %
-    ],
-)
-def test_tolerance_edges(predicted, is_match):
-    outcome = score.judge_answer("100", "", predicted, None, TOL)
-    assert (outcome == score.CORRECT) == is_match
-
-
-def test_tolerance_edge_has_no_float_error():
-    # With float, abs(1.01 - 1.00) is 0.010000000000000009, which is more than 1 %.
-    assert score.judge_answer("1.00", "", "1.01", None, 0.01) == score.CORRECT
-
-
-def test_tolerance_is_relative_to_expected_value():
-    # 1 % of 1150000 is 11500.
-    assert score.judge_answer("1.15E+06", "", "1161500", None, TOL) == score.CORRECT
-    assert score.judge_answer("1.15E+06", "", "1161501", None, TOL) == score.WRONG_VALUE
 
 
 def test_expected_zero_needs_exact_zero():
-    assert score.judge_answer("0", "", "0.0", None, TOL) == score.CORRECT
-    assert score.judge_answer("0", "", "0.0001", None, TOL) == score.WRONG_VALUE
+    assert score.judge_answer("0", "", "0.0", None) == score.CORRECT
+    assert score.judge_answer("0", "", "0.0001", None) == score.WRONG_VALUE
 
 
 def test_numeric_expected_with_text_answer_is_wrong():
-    assert score.judge_answer("87", "IN", "87 in", "IN", TOL) == score.WRONG_VALUE
-
-
-def test_tolerance_can_change():
-    assert score.judge_answer("100", "", "105", None, 0.05) == score.CORRECT
-    assert score.judge_answer("100", "", "105", None, 0.01) == score.WRONG_VALUE
+    assert score.judge_answer("87", "IN", "87 in", "IN") == score.WRONG_VALUE
 
 
 # --- units ------------------------------------------------------------------
 
 
 def test_unit_mismatch():
-    assert score.judge_answer("87", "IN", "87", "ft", TOL) == score.WRONG_UNITS
+    assert score.judge_answer("87", "IN", "87", "ft") == score.WRONG_UNITS
 
 
 def test_missing_units_when_units_are_expected():
-    assert score.judge_answer("87", "IN", "87", None, TOL) == score.WRONG_UNITS
+    assert score.judge_answer("87", "IN", "87", None) == score.WRONG_UNITS
 
 
 def test_unit_aliases_and_case():
-    assert score.judge_answer("87", "IN", "87", "inches", TOL) == score.CORRECT
-    assert score.judge_answer("110020", "pounds", "110020", "lb", TOL) == score.CORRECT
-    assert score.judge_answer("1.15E+06", "N-m2", "1.15E+06", "N·m²", TOL) == score.CORRECT
-    assert score.judge_answer("337", "LB/IN", "337", "lb / in", TOL) == score.CORRECT
-    assert score.judge_answer("168", "knots", "168", "kt", TOL) == score.CORRECT
-    assert score.judge_answer("0.3", "n. mi.", "0.3", "nmi", TOL) == score.CORRECT
-    assert score.judge_answer("350", "lb/sq in", "350", "psi", TOL) == score.CORRECT
-    assert score.judge_answer("195", "fps", "195", "ft/sec", TOL) == score.CORRECT
-    assert score.judge_answer("790", "sq ft", "790", "ft²", TOL) == score.CORRECT
-    assert score.judge_answer("250", "°F", "250", "deg F", TOL) == score.CORRECT
-    assert score.judge_answer("15", "deg", "15", "°", TOL) == score.CORRECT
-    assert score.judge_answer("15", "deg", "15", "°F", TOL) == score.WRONG_UNITS
+    assert score.judge_answer("87", "IN", "87", "inches") == score.CORRECT
+    assert score.judge_answer("110020", "pounds", "110020", "lb") == score.CORRECT
+    assert score.judge_answer("1.15E+06", "N-m2", "1.15E+06", "N·m²") == score.CORRECT
+    assert score.judge_answer("337", "LB/IN", "337", "lb / in") == score.CORRECT
+    assert score.judge_answer("168", "knots", "168", "kt") == score.CORRECT
+    assert score.judge_answer("0.3", "n. mi.", "0.3", "nmi") == score.CORRECT
+    assert score.judge_answer("350", "lb/sq in", "350", "psi") == score.CORRECT
+    assert score.judge_answer("195", "fps", "195", "ft/sec") == score.CORRECT
+    assert score.judge_answer("790", "sq ft", "790", "ft²") == score.CORRECT
+    assert score.judge_answer("250", "°F", "250", "deg F") == score.CORRECT
+    assert score.judge_answer("15", "deg", "15", "°") == score.CORRECT
+    assert score.judge_answer("15", "deg", "15", "°F") == score.WRONG_UNITS
 
 
 def test_blank_expected_units_are_not_checked():
-    assert score.judge_answer("39477", "", "39477", "ft", TOL) == score.CORRECT
+    assert score.judge_answer("39477", "", "39477", "ft") == score.CORRECT
 
 
 def test_wrong_value_has_priority_over_wrong_units():
-    assert score.judge_answer("87", "IN", "90", "ft", TOL) == score.WRONG_VALUE
+    assert score.judge_answer("87", "IN", "90", "ft") == score.WRONG_VALUE
 
 
 # --- text answers -----------------------------------------------------------
 
 
 def test_text_normalised_exact_match():
-    assert score.judge_answer("Hysol 5189/3538", "", "hysol 5189 / 3538.", None, TOL) == score.CORRECT
-    assert score.judge_answer("1925Z-0014Z/15", "", "1925Z–0014Z/15", None, TOL) == score.CORRECT  # en dash
-    assert score.judge_answer("Hysol 5189/3538", "", "Hysol 5189", None, TOL) == score.WRONG_VALUE
+    assert score.judge_answer("Hysol 5189/3538", "", "hysol 5189 / 3538.", None) == score.CORRECT
+    assert score.judge_answer("1925Z-0014Z/15", "", "1925Z–0014Z/15", None) == score.CORRECT  # en dash
+    assert score.judge_answer("Hysol 5189/3538", "", "Hysol 5189", None) == score.WRONG_VALUE
 
 
 # --- whole records ----------------------------------------------------------
@@ -188,26 +146,26 @@ def test_text_normalised_exact_match():
     ],
 )
 def test_malformed_response_is_schema_failure(raw):
-    row = score.score_item(make_question("3"), make_record(raw), TOL)
+    row = score.score_item(make_question("3"), make_record(raw))
     assert row["outcome"] == score.SCHEMA_FAILURE
     assert row["detail"] != ""
 
 
 def test_valid_response_is_scored():
-    row = score.score_item(make_question("43", "%"), make_record(answer_json("43.0", "percent")), TOL)
+    row = score.score_item(make_question("43", "%"), make_record(answer_json("43.0", "percent")))
     assert row["outcome"] == score.CORRECT
     assert row["predicted_value"] == "43.0"
 
 
 def test_not_found():
-    row = score.score_item(make_question("3"), make_record(answer_json(None, found=False, confidence="low")), TOL)
+    row = score.score_item(make_question("3"), make_record(answer_json(None, found=False, confidence="low")))
     assert row["outcome"] == score.NOT_FOUND
 
 
 def test_api_error_and_missing_record():
     api_record = make_record(None, error_type="api", error="RateLimitError")
-    assert score.score_item(make_question("3"), api_record, TOL)["outcome"] == score.API_ERROR
-    assert score.score_item(make_question("3"), None, TOL)["outcome"] == score.MISSING
+    assert score.score_item(make_question("3"), api_record)["outcome"] == score.API_ERROR
+    assert score.score_item(make_question("3"), None)["outcome"] == score.MISSING
 
 
 # --- totals -----------------------------------------------------------------
@@ -224,8 +182,8 @@ def test_summarise_counts_schema_failures_in_accuracy_denominator():
     questions = [make_question("3"), make_question("4")]
     questions[1]["qid"] = "page#2"
     rows = [
-        score.score_item(questions[0], make_record(answer_json("3")), TOL),
-        score.score_item(questions[1], make_record("not json"), TOL),
+        score.score_item(questions[0], make_record(answer_json("3"))),
+        score.score_item(questions[1], make_record("not json")),
     ]
     summary = score.summarise(rows, {"page#1": make_record(answer_json("3"))})
     assert summary["accuracy"] == 0.5
